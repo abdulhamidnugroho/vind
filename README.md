@@ -46,10 +46,8 @@ cd vind
 cd backend
 go mod tidy
 cp .env.example .env   # Add your DB credentials
-go run cmd/server/main.go
+go run cmd/main.go
 ```
-
-> Make sure your database is running and the DSN is set in `.env`.
 
 ### 3. Frontend Setup (React)
 
@@ -68,9 +66,7 @@ npm run dev
 ### `.env` (backend)
 
 ```dotenv
-PORT=8080
-DB_TYPE=postgres
-DB_DSN=host=localhost user=postgres password=secret dbname=mydb port=5432 sslmode=disable
+PORT=56789
 ```
 
 ---
@@ -102,12 +98,12 @@ docker-compose up --build
 ---
 
 ## 📌 Roadmap
-
+<!-- 
 - [ ] UI-based SQL editor
 - [ ] Table schema editor
 - [ ] Multi-database connections
 - [ ] Query history and saved queries
-- [ ] User auth and sessions
+- [ ] User auth and sessions -->
 
 ---
 
