@@ -5,5 +5,5 @@ type DBClient interface {
 	Disconnect() error
 	ListSchemas() ([]string, error)
 	ListTables(schema string) ([]string, error)
-	RunQuery(query string) ([]map[string]interface{}, error)
+	RunQuery(query string) ([]map[string]any, error)
 }

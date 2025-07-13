@@ -19,5 +19,7 @@ func main() {
 	r.GET("/ping", handler.Ping)
 
 	r.POST("/connect", handler.ConnectHandler)
+	r.GET("/tables", handler.ListTablesHandler)
+
 	r.Run(":" + os.Getenv("PORT")) // Default port is set in .env file
 }

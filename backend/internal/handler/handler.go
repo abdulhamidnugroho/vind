@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-
 	"vind/backend/internal/model"
 	"vind/backend/internal/service"
 
@@ -10,6 +9,10 @@ import (
 )
 
 var activeDB service.DBClient
+
+// newPostgresClient is a function that returns a service.DBClient.
+// By default, it returns service.NewPostgresClient(), but can be overridden in tests.
+var newPostgresClient func() service.DBClient = func() service.DBClient { return service.NewPostgresClient() }
 
 func Ping(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
@@ -26,7 +29,7 @@ func ConnectHandler(c *gin.Context) {
 
 	switch req.Driver {
 	case "postgres":
-		activeDB = service.NewPostgresClient()
+		activeDB = newPostgresClient()
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported driver"})
 		return
@@ -38,4 +41,25 @@ func ConnectHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Connected successfully"})
+}
+
+func ListTablesHandler(c *gin.Context) {
+	if activeDB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No active DB connection"})
+		return
+	}
+
+	schema := c.DefaultQuery("schema", "public")
+
+	tables, err := activeDB.ListTables(schema)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if tables == nil {
+		tables = []string{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"tables": tables})
 }

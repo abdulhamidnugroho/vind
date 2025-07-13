@@ -49,6 +49,10 @@ func (p *PostgresClient) ListSchemas() ([]string, error) {
 }
 
 func (p *PostgresClient) ListTables(schema string) ([]string, error) {
+	if schema == "" {
+		schema = "public"
+	}
+
 	query := `SELECT table_name FROM information_schema.tables WHERE table_schema = $1`
 	rows, err := p.db.Query(query, schema)
 	if err != nil {
@@ -67,7 +71,7 @@ func (p *PostgresClient) ListTables(schema string) ([]string, error) {
 	return tables, nil
 }
 
-func (p *PostgresClient) RunQuery(query string) ([]map[string]interface{}, error) {
+func (p *PostgresClient) RunQuery(query string) ([]map[string]any, error) {
 	rows, err := p.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -79,10 +83,10 @@ func (p *PostgresClient) RunQuery(query string) ([]map[string]interface{}, error
 		return nil, err
 	}
 
-	results := []map[string]interface{}{}
+	results := []map[string]any{}
 	for rows.Next() {
-		columns := make([]interface{}, len(cols))
-		columnPointers := make([]interface{}, len(cols))
+		columns := make([]any, len(cols))
+		columnPointers := make([]any, len(cols))
 
 		for i := range columns {
 			columnPointers[i] = &columns[i]
@@ -92,9 +96,9 @@ func (p *PostgresClient) RunQuery(query string) ([]map[string]interface{}, error
 			return nil, err
 		}
 
-		rowMap := map[string]interface{}{}
+		rowMap := map[string]any{}
 		for i, colName := range cols {
-			val := columnPointers[i].(*interface{})
+			val := columnPointers[i].(*any)
 			rowMap[colName] = *val
 		}
 
