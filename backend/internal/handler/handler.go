@@ -63,3 +63,25 @@ func ListTablesHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"tables": tables})
 }
+
+func ListColumnsHandler(c *gin.Context) {
+	if activeDB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Not connected to any database"})
+		return
+	}
+
+	schema := c.DefaultQuery("schema", "public")
+	table := c.Query("table")
+	if table == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'table' query parameter"})
+		return
+	}
+
+	columns, err := activeDB.ListColumns(schema, table)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch columns: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"columns": columns})
+}

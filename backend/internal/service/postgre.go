@@ -2,6 +2,7 @@ package service
 
 import (
 	"database/sql"
+	"vind/backend/internal/model"
 
 	_ "github.com/lib/pq"
 )
@@ -69,6 +70,34 @@ func (p *PostgresClient) ListTables(schema string) ([]string, error) {
 		tables = append(tables, name)
 	}
 	return tables, nil
+}
+
+func (p *PostgresClient) ListColumns(schema, table string) ([]model.Column, error) {
+	query := `
+		SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = $2
+		ORDER BY ordinal_position;
+	`
+
+	rows, err := p.db.Query(query, schema, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var columns []model.Column
+	for rows.Next() {
+		var col model.Column
+		var nullable string
+		if err := rows.Scan(&col.Name, &col.Type, &nullable); err != nil {
+			return nil, err
+		}
+		col.Nullable = nullable == "YES"
+		columns = append(columns, col)
+	}
+
+	return columns, nil
 }
 
 func (p *PostgresClient) RunQuery(query string) ([]map[string]any, error) {
