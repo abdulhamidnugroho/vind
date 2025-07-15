@@ -18,8 +18,9 @@ import (
 // Only Connect is implemented for this handler's test
 
 type mockDBClient struct {
-	connectFunc     func(dsn string) error
-	listColumnsFunc func(schema, table string) ([]model.Column, error)
+	connectFunc      func(dsn string) error
+	listColumnsFunc  func(schema, table string) ([]model.Column, error)
+	executeQueryFunc func(query string) ([]string, [][]any, error)
 }
 
 func (m *mockDBClient) Connect(dsn string) error {
@@ -34,7 +35,12 @@ func (m *mockDBClient) ListColumns(schema, table string) ([]model.Column, error)
 	}
 	return nil, nil
 }
-func (m *mockDBClient) RunQuery(query string) ([]map[string]any, error) { return nil, nil }
+func (m *mockDBClient) ExecuteQuery(query string) ([]string, [][]any, error) {
+	if m.executeQueryFunc != nil {
+		return m.executeQueryFunc(query)
+	}
+	return nil, nil, nil
+}
 
 type listTablesMock struct {
 	mockDBClient
@@ -173,6 +179,76 @@ func TestListTablesHandler(t *testing.T) {
 			c.Request, _ = http.NewRequest("GET", url, nil)
 
 			ListTablesHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			assert.Contains(t, w.Body.String(), tc.expectedBody)
+		})
+	}
+}
+
+func TestQueryHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name             string
+		activeDB         service.DBClient
+		body             string
+		executeQueryFunc func(query string) ([]string, [][]any, error)
+		expectedCode     int
+		expectedBody     string
+	}{
+		{
+			name:         "invalid json",
+			activeDB:     &mockDBClient{},
+			body:         `{"sql": `, // malformed
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"Invalid request"}`,
+		},
+		{
+			name:         "no active db",
+			activeDB:     nil,
+			body:         `{"sql": "SELECT 1"}`,
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"No active database connection"}`,
+		},
+		{
+			name: "query error",
+			activeDB: &mockDBClient{
+				executeQueryFunc: func(query string) ([]string, [][]any, error) {
+					return nil, nil, errors.New("fail query")
+				},
+			},
+			body:         `{"sql": "SELECT * FROM foo"}`,
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: `{"error":"fail query"}`,
+		},
+		{
+			name: "success",
+			activeDB: &mockDBClient{
+				executeQueryFunc: func(query string) ([]string, [][]any, error) {
+					return []string{"id", "name"}, [][]any{{1, "Alice"}, {2, "Bob"}}, nil
+				},
+			},
+			body:         `{"sql": "SELECT id, name FROM users"}`,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"columns":["id","name"],"rows":[[1,"Alice"],[2,"Bob"]]}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest("POST", "/query", bytes.NewBufferString(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			// Patch ExecuteQuery if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.executeQueryFunc != nil {
+				m.executeQueryFunc = tc.executeQueryFunc
+			}
+
+			QueryHandler(c)
 
 			assert.Equal(t, tc.expectedCode, w.Code)
 			assert.Contains(t, w.Body.String(), tc.expectedBody)

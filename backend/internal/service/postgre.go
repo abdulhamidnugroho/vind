@@ -2,6 +2,7 @@ package service
 
 import (
 	"database/sql"
+	"strings"
 	"vind/backend/internal/model"
 
 	_ "github.com/lib/pq"
@@ -100,39 +101,42 @@ func (p *PostgresClient) ListColumns(schema, table string) ([]model.Column, erro
 	return columns, nil
 }
 
-func (p *PostgresClient) RunQuery(query string) ([]map[string]any, error) {
-	rows, err := p.db.Query(query)
+func (p *PostgresClient) ExecuteQuery(sql string) ([]string, [][]any, error) {
+	trimmed := strings.TrimSpace(strings.ToUpper(sql))
+	if !strings.HasPrefix(trimmed, "SELECT") {
+		// For non-SELECT queries, use Exec
+		_, err := p.db.Exec(sql)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Return no columns or rows
+		return nil, nil, nil
+	}
+
+	// SELECT query
+	rows, err := p.db.Query(sql)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 
-	cols, err := rows.Columns()
+	columns, err := rows.Columns()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	results := []map[string]any{}
+	var results [][]any
 	for rows.Next() {
-		columns := make([]any, len(cols))
-		columnPointers := make([]any, len(cols))
-
-		for i := range columns {
-			columnPointers[i] = &columns[i]
+		values := make([]any, len(columns))
+		pointers := make([]any, len(columns))
+		for i := range values {
+			pointers[i] = &values[i]
 		}
-
-		if err := rows.Scan(columnPointers...); err != nil {
-			return nil, err
+		if err := rows.Scan(pointers...); err != nil {
+			return nil, nil, err
 		}
-
-		rowMap := map[string]any{}
-		for i, colName := range cols {
-			val := columnPointers[i].(*any)
-			rowMap[colName] = *val
-		}
-
-		results = append(results, rowMap)
+		results = append(results, values)
 	}
 
-	return results, nil
+	return columns, results, nil
 }

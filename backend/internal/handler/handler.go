@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"vind/backend/internal/model"
 	"vind/backend/internal/service"
@@ -76,7 +77,7 @@ func ListColumnsHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'table' query parameter"})
 		return
 	}
-
+	log.Printf("Listing columns for %s.%s\n", schema, table)
 	columns, err := activeDB.ListColumns(schema, table)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch columns: " + err.Error()})

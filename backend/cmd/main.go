@@ -21,6 +21,7 @@ func main() {
 	r.POST("/connect", handler.ConnectHandler)
 	r.GET("/tables", handler.ListTablesHandler)
 	r.GET("/columns", handler.ListColumnsHandler)
+	r.POST("/query", handler.QueryHandler)
 
 	r.Run(":" + os.Getenv("PORT")) // Default port is set in .env file
 }

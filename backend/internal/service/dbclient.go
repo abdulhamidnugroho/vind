@@ -8,5 +8,5 @@ type DBClient interface {
 	ListSchemas() ([]string, error)
 	ListTables(schema string) ([]string, error)
 	ListColumns(schema, table string) ([]model.Column, error)
-	RunQuery(query string) ([]map[string]any, error)
+	ExecuteQuery(query string) ([]string, [][]any, error)
 }
