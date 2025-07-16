@@ -2,7 +2,11 @@ package service
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
+	"strconv"
 	"strings"
+	"vind/backend/helper"
 	"vind/backend/internal/model"
 
 	_ "github.com/lib/pq"
@@ -139,4 +143,167 @@ func (p *PostgresClient) ExecuteQuery(sql string) ([]string, [][]any, error) {
 	}
 
 	return columns, results, nil
+}
+
+func (p *PostgresClient) GetTableData(req model.TableDataRequest) ([]string, [][]any, error) {
+	if !helper.IsValidIdentifier(req.Schema) || !helper.IsValidIdentifier(req.Table) {
+		return nil, nil, errors.New("invalid schema or table name")
+	}
+
+	limitInt, err := strconv.Atoi(req.Limit)
+	if err != nil || limitInt < 0 {
+		return nil, nil, fmt.Errorf("invalid limit")
+	}
+
+	offsetInt, err := strconv.Atoi(req.Offset)
+	if err != nil || offsetInt < 0 {
+		return nil, nil, fmt.Errorf("invalid offset")
+	}
+
+	query := fmt.Sprintf(`SELECT * FROM "%s"."%s" LIMIT $1 OFFSET $2`, req.Schema, req.Table)
+	rows, err := p.db.Query(query, limitInt, offsetInt)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var results [][]any
+	for rows.Next() {
+		values := make([]any, len(columns))
+		pointers := make([]any, len(columns))
+		for i := range values {
+			pointers[i] = &values[i]
+		}
+		if err := rows.Scan(pointers...); err != nil {
+			return nil, nil, err
+		}
+		results = append(results, values)
+	}
+
+	return columns, results, nil
+}
+
+func (p *PostgresClient) InsertRecord(schema, table string, data map[string]any) error {
+	if len(data) == 0 {
+		return errors.New("no data to insert")
+	}
+
+	columns := []string{}
+	placeholders := []string{}
+	values := []any{}
+
+	i := 1
+	for col, val := range data {
+		columns = append(columns, col)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", i))
+		values = append(values, val)
+		i++
+	}
+
+	query := fmt.Sprintf(
+		`INSERT INTO "%s"."%s" (%s) VALUES (%s)`,
+		schema,
+		table,
+		strings.Join(columns, ", "),
+		strings.Join(placeholders, ", "),
+	)
+
+	_, err := p.db.Exec(query, values...)
+	return err
+}
+
+func (p *PostgresClient) UpdateRecord(schema, table string, data, where map[string]any) (int64, error) {
+	if len(data) == 0 {
+		return 0, errors.New("no fields to update")
+	}
+	if len(where) == 0 {
+		return 0, errors.New("missing WHERE clause — dangerous update prevented")
+	}
+
+	setClauses := []string{}
+	whereClauses := []string{}
+	values := []any{}
+	i := 1
+
+	// Build SET clause
+	for col, val := range data {
+		if !helper.IsValidIdentifier(col) {
+			return 0, fmt.Errorf("invalid column name: %s", col)
+		}
+		setClauses = append(setClauses, fmt.Sprintf(`"%s" = $%d`, col, i))
+		values = append(values, val)
+		i++
+	}
+
+	// Build WHERE clause
+	for col, val := range where {
+		if !helper.IsValidIdentifier(col) {
+			return 0, fmt.Errorf("invalid column name: %s", col)
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf(`"%s" = $%d`, col, i))
+		values = append(values, val)
+		i++
+	}
+
+	query := fmt.Sprintf(
+		`UPDATE "%s"."%s" SET %s WHERE %s`,
+		schema,
+		table,
+		strings.Join(setClauses, ", "),
+		strings.Join(whereClauses, " AND "),
+	)
+
+	result, err := p.db.Exec(query, values...)
+	if err != nil {
+		return 0, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	return rowsAffected, nil
+}
+
+func (p *PostgresClient) DeleteRecord(schema, table string, conditions map[string]any) (int64, error) {
+	if schema == "" {
+		schema = "public"
+	}
+
+	if table == "" || len(conditions) == 0 {
+		return 0, fmt.Errorf("table name and conditions are required")
+	}
+
+	query := fmt.Sprintf(`DELETE FROM "%s"."%s" WHERE `, schema, table)
+
+	var args []any
+	var conds []string
+	i := 1
+	for col, val := range conditions {
+		if !helper.IsValidIdentifier(col) {
+			return 0, fmt.Errorf("invalid column name: %s", col)
+		}
+		conds = append(conds, fmt.Sprintf(`"%s" = $%d`, col, i))
+		args = append(args, val)
+		i++
+	}
+	query += strings.Join(conds, " AND ")
+
+	result, err := p.db.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute delete: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	return rowsAffected, nil
 }

@@ -14,13 +14,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// mockDBClient implements service.DBClient for testing
-// Only Connect is implemented for this handler's test
-
 type mockDBClient struct {
 	connectFunc      func(dsn string) error
 	listColumnsFunc  func(schema, table string) ([]model.Column, error)
 	executeQueryFunc func(query string) ([]string, [][]any, error)
+	getTableDataFunc func(model.TableDataRequest) ([]string, [][]any, error)
+	insertRecordFunc func(schema, table string, data map[string]any) error
+	updateRecordFunc func(schema, table string, data, where map[string]any) (int64, error)
+	deleteRecordFunc func(schema, table string, conditions map[string]any) (int64, error)
 }
 
 func (m *mockDBClient) Connect(dsn string) error {
@@ -40,6 +41,30 @@ func (m *mockDBClient) ExecuteQuery(query string) ([]string, [][]any, error) {
 		return m.executeQueryFunc(query)
 	}
 	return nil, nil, nil
+}
+func (m *mockDBClient) GetTableData(req model.TableDataRequest) ([]string, [][]any, error) {
+	if m.getTableDataFunc != nil {
+		return m.getTableDataFunc(req)
+	}
+	return nil, nil, nil
+}
+func (m *mockDBClient) InsertRecord(schema, table string, data map[string]any) error {
+	if m.insertRecordFunc != nil {
+		return m.insertRecordFunc(schema, table, data)
+	}
+	return nil
+}
+func (m *mockDBClient) UpdateRecord(schema, table string, data, where map[string]any) (int64, error) {
+	if m.updateRecordFunc != nil {
+		return m.updateRecordFunc(schema, table, data, where)
+	}
+	return 0, nil
+}
+func (m *mockDBClient) DeleteRecord(schema, table string, conditions map[string]any) (int64, error) {
+	if m.deleteRecordFunc != nil {
+		return m.deleteRecordFunc(schema, table, conditions)
+	}
+	return 0, nil
 }
 
 type listTablesMock struct {
@@ -330,6 +355,308 @@ func TestListColumnsHandler(t *testing.T) {
 
 			assert.Equal(t, tc.expectedCode, w.Code)
 			assert.Contains(t, w.Body.String(), tc.expectedBody)
+		})
+	}
+}
+
+func TestTableDataHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		activeDB       service.DBClient
+		queryParams    string
+		getTableDataFn func(model.TableDataRequest) ([]string, [][]any, error)
+		expectedCode   int
+		expectedBody   string
+	}{
+		{
+			name:         "no active db",
+			activeDB:     nil,
+			queryParams:  "schema=public&table=users",
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"Not connected to any database"}`,
+		},
+		{
+			name:         "missing table param",
+			activeDB:     &mockDBClient{},
+			queryParams:  "schema=public",
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"Missing table name"}`,
+		},
+		{
+			name: "db error",
+			activeDB: &mockDBClient{
+				getTableDataFunc: func(req model.TableDataRequest) ([]string, [][]any, error) {
+					return nil, nil, errors.New("fail db")
+				},
+			},
+			queryParams:  "schema=public&table=users",
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: `{"error":"fail db"}`,
+		},
+		{
+			name: "success",
+			activeDB: &mockDBClient{
+				getTableDataFunc: func(req model.TableDataRequest) ([]string, [][]any, error) {
+					return []string{"id", "name"}, [][]any{{1, "Alice"}, {2, "Bob"}}, nil
+				},
+			},
+			queryParams:  "schema=public&table=users&limit=2&offset=0",
+			expectedCode: http.StatusOK,
+			expectedBody: `{"columns":["id","name"],"rows":[[1,"Alice"],[2,"Bob"]]}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			url := "/tabledata?" + tc.queryParams
+			c.Request, _ = http.NewRequest("GET", url, nil)
+
+			// Patch GetTableData if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.getTableDataFn != nil {
+				m.getTableDataFunc = tc.getTableDataFn
+			}
+
+			TableDataHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			assert.Contains(t, w.Body.String(), tc.expectedBody)
+		})
+	}
+}
+
+func TestInsertRecordHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name             string
+		activeDB         service.DBClient
+		body             string
+		insertRecordFunc func(schema, table string, data map[string]any) error
+		expectedCode     int
+		expectedBody     string
+	}{
+		{
+			name:         "invalid json",
+			activeDB:     &mockDBClient{},
+			body:         `{"schema": "public", "table": "users", "data": `, // malformed
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"Invalid JSON"}`,
+		},
+		{
+			name:         "no active db",
+			activeDB:     nil,
+			body:         `{"schema": "public", "table": "users", "data": {"name": "Abdul"}}`,
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"No active DB connection"}`,
+		},
+		{
+			name: "db error",
+			activeDB: &mockDBClient{
+				insertRecordFunc: func(schema, table string, data map[string]any) error {
+					return errors.New("fail insert")
+				},
+			},
+			body:         `{"schema": "public", "table": "users", "data": {"name": "Abdul"}}`,
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: `{"error":"fail insert"}`,
+		},
+		{
+			name: "success",
+			activeDB: &mockDBClient{
+				insertRecordFunc: func(schema, table string, data map[string]any) error {
+					return nil
+				},
+			},
+			body:         `{"schema": "public", "table": "users", "data": {"name": "Abdul"}}`,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"Record inserted successfully"}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest("POST", "/records", bytes.NewBufferString(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			// Patch InsertRecord if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.insertRecordFunc != nil {
+				m.insertRecordFunc = tc.insertRecordFunc
+			}
+
+			InsertRecordHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			assert.Contains(t, w.Body.String(), tc.expectedBody)
+		})
+	}
+}
+
+func TestUpdateRecordHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name             string
+		activeDB         service.DBClient
+		body             string
+		updateRecordFunc func(schema, table string, data, where map[string]any) (int64, error)
+		expectedCode     int
+		expectedBody     string
+	}{
+		{
+			name:         "invalid json",
+			activeDB:     &mockDBClient{},
+			body:         `{"schema": "public", "table": "users", "data": {"email": "updated@example.com"}, "where": `, // malformed
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"Invalid JSON"}`,
+		},
+		{
+			name:         "no active db",
+			activeDB:     nil,
+			body:         `{"schema": "public", "table": "users", "data": {"email": "updated@example.com"}, "where": {"id": 1}}`,
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"No active DB connection"}`,
+		},
+		{
+			name: "db error",
+			activeDB: &mockDBClient{
+				updateRecordFunc: func(schema, table string, data, where map[string]any) (int64, error) {
+					return 0, errors.New("fail update")
+				},
+			},
+			body:         `{"schema": "public", "table": "users", "data": {"email": "updated@example.com"}, "where": {"id": 1}}`,
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: `{"error":"fail update"}`,
+		},
+		{
+			name: "success",
+			activeDB: &mockDBClient{
+				updateRecordFunc: func(schema, table string, data, where map[string]any) (int64, error) {
+					return 1, nil
+				},
+			},
+			body:         `{"schema": "public", "table": "users", "data": {"email": "updated@example.com"}, "where": {"id": 1}}`,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"Record(s) updated successfully","rows_affected":1}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest("PUT", "/records", bytes.NewBufferString(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			// Patch UpdateRecord if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.updateRecordFunc != nil {
+				m.updateRecordFunc = tc.updateRecordFunc
+			}
+
+			UpdateRecordHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			if tc.expectedCode == http.StatusOK {
+				assert.JSONEq(t, tc.expectedBody, w.Body.String())
+			} else {
+				assert.Contains(t, w.Body.String(), tc.expectedBody)
+			}
+		})
+	}
+}
+
+func TestDeleteRecordHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name             string
+		activeDB         service.DBClient
+		body             string
+		deleteRecordFunc func(schema, table string, conditions map[string]any) (int64, error)
+		expectedCode     int
+		expectedBody     string
+	}{
+		{
+			name:         "invalid json",
+			activeDB:     &mockDBClient{},
+			body:         `{"schema": "public", "table": "users", "conditions": `, // malformed
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"Invalid request payload"}`,
+		},
+		{
+			name:         "missing table",
+			activeDB:     &mockDBClient{},
+			body:         `{"schema": "public", "conditions": {"id": 1}}`,
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"Missing table or conditions"}`,
+		},
+		{
+			name:         "missing conditions",
+			activeDB:     &mockDBClient{},
+			body:         `{"schema": "public", "table": "users"}`,
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"Missing table or conditions"}`,
+		},
+		{
+			name:         "no active db",
+			activeDB:     nil,
+			body:         `{"schema": "public", "table": "users", "conditions": {"id": 1}}`,
+			expectedCode: http.StatusServiceUnavailable,
+			expectedBody: `{"error":"No active database connection"}`,
+		},
+		{
+			name: "db error",
+			activeDB: &mockDBClient{
+				deleteRecordFunc: func(schema, table string, conditions map[string]any) (int64, error) {
+					return 0, errors.New("fail delete")
+				},
+			},
+			body:         `{"schema": "public", "table": "users", "conditions": {"id": 1}}`,
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: `{"error":"fail delete"}`,
+		},
+		{
+			name: "success",
+			activeDB: &mockDBClient{
+				deleteRecordFunc: func(schema, table string, conditions map[string]any) (int64, error) {
+					return 1, nil
+				},
+			},
+			body:         `{"schema": "public", "table": "users", "conditions": {"id": 1}}`,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"Record deleted successfully","rows_affected":1}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest("DELETE", "/records", bytes.NewBufferString(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			// Patch DeleteRecord if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.deleteRecordFunc != nil {
+				m.deleteRecordFunc = tc.deleteRecordFunc
+			}
+
+			DeleteRecordHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			if tc.expectedCode == http.StatusOK {
+				assert.JSONEq(t, tc.expectedBody, w.Body.String())
+			} else {
+				assert.Contains(t, w.Body.String(), tc.expectedBody)
+			}
 		})
 	}
 }
