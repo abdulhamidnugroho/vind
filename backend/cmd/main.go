@@ -22,7 +22,7 @@ func main() {
 	r.GET("/tables", handler.ListTablesHandler)
 	r.GET("/columns", handler.ListColumnsHandler)
 	r.POST("/query", handler.QueryHandler)
-	r.GET("/table-data", handler.TableDataHandler)
+	r.GET("/records", handler.TableDataHandler)
 	r.POST("/records", handler.InsertRecordHandler)
 	r.PUT("/records", handler.UpdateRecordHandler)
 	r.DELETE("/records", handler.DeleteRecordHandler)

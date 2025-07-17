@@ -43,22 +43,25 @@ func TableDataHandler(c *gin.Context) {
 	table := c.Query("table")
 	limit := c.DefaultQuery("limit", "100")
 	offset := c.DefaultQuery("offset", "0")
+	orderBy := c.Query("order_by")
+	filters := c.QueryArray("filter")
 
 	if activeDB == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Not connected to any database"})
 		return
 	}
-
 	if table == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing table name"})
 		return
 	}
 
 	req := model.TableDataRequest{
-		Schema: schema,
-		Table:  table,
-		Limit:  limit,
-		Offset: offset,
+		Schema:  schema,
+		Table:   table,
+		Limit:   limit,
+		Offset:  offset,
+		OrderBy: orderBy,
+		Filters: filters,
 	}
 
 	columns, rows, err := activeDB.GetTableData(req)
@@ -71,7 +74,6 @@ func TableDataHandler(c *gin.Context) {
 		Columns: columns,
 		Rows:    rows,
 	}
-
 	c.JSON(http.StatusOK, resp)
 }
 

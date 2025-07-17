@@ -9,6 +9,7 @@ import (
 	"vind/backend/helper"
 	"vind/backend/internal/model"
 
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 )
 
@@ -160,8 +161,40 @@ func (p *PostgresClient) GetTableData(req model.TableDataRequest) ([]string, [][
 		return nil, nil, fmt.Errorf("invalid offset")
 	}
 
-	query := fmt.Sprintf(`SELECT * FROM "%s"."%s" LIMIT $1 OFFSET $2`, req.Schema, req.Table)
-	rows, err := p.db.Query(query, limitInt, offsetInt)
+	query := fmt.Sprintf(`SELECT * FROM "%s"."%s"`, req.Schema, req.Table)
+	args := []any{}
+	conditions := []string{}
+
+	for _, f := range req.Filters {
+		parts := strings.SplitN(f, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		col := pq.QuoteIdentifier(parts[0])
+		op := strings.ToUpper(parts[1])
+		val := parts[2]
+
+		switch op {
+		case "LIKE", "=", ">", "<", ">=", "<=":
+			conditions = append(conditions, fmt.Sprintf("%s %s $%d", col, op, len(args)+1))
+			args = append(args, val)
+		default:
+			continue // skip unsupported operator
+		}
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	if req.OrderBy != "" && helper.IsValidIdentifier(req.OrderBy) {
+		query += " ORDER BY " + pq.QuoteIdentifier(req.OrderBy)
+	}
+
+	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	args = append(args, limitInt, offsetInt)
+
+	rows, err := p.db.Query(query, args...)
 	if err != nil {
 		return nil, nil, err
 	}
