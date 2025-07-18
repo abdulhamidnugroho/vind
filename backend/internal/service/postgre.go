@@ -80,10 +80,39 @@ func (p *PostgresClient) ListTables(schema string) ([]string, error) {
 
 func (p *PostgresClient) ListColumns(schema, table string) ([]model.Column, error) {
 	query := `
-		SELECT column_name, data_type, is_nullable
-		FROM information_schema.columns
-		WHERE table_schema = $1 AND table_name = $2
-		ORDER BY ordinal_position;
+		SELECT 
+			c.column_name,
+			c.data_type,
+			c.is_nullable,
+			c.column_default,
+			-- Check if column is part of a unique constraint
+			EXISTS (
+				SELECT 1 FROM information_schema.table_constraints tc
+				JOIN information_schema.constraint_column_usage ccu 
+					ON tc.constraint_name = ccu.constraint_name
+				WHERE tc.constraint_type = 'UNIQUE'
+					AND tc.table_schema = c.table_schema
+					AND tc.table_name = c.table_name
+					AND ccu.column_name = c.column_name
+			) AS is_unique,
+			-- Get foreign key reference if any
+			(
+				SELECT
+					pg_get_constraintdef(con.oid)
+				FROM
+					pg_constraint con
+					INNER JOIN pg_class rel ON rel.oid = con.conrelid
+					INNER JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attnum = ANY(con.conkey)
+				WHERE
+					con.contype = 'f'
+					AND rel.relname = $2
+					AND att.attname = c.column_name
+					AND rel.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1)
+				LIMIT 1
+			) AS foreign_key
+		FROM information_schema.columns c
+		WHERE c.table_schema = $1 AND c.table_name = $2
+		ORDER BY c.ordinal_position;
 	`
 
 	rows, err := p.db.Query(query, schema, table)
@@ -96,10 +125,24 @@ func (p *PostgresClient) ListColumns(schema, table string) ([]model.Column, erro
 	for rows.Next() {
 		var col model.Column
 		var nullable string
-		if err := rows.Scan(&col.Name, &col.Type, &nullable); err != nil {
+		var defaultVal sql.NullString
+		var isUnique sql.NullBool
+		var foreignKey sql.NullString
+
+		err := rows.Scan(&col.Name, &col.Type, &nullable, &defaultVal, &isUnique, &foreignKey)
+		if err != nil {
 			return nil, err
 		}
+
 		col.Nullable = nullable == "YES"
+		if defaultVal.Valid {
+			col.Default = defaultVal.String
+		}
+		col.IsUnique = isUnique.Valid && isUnique.Bool
+		if foreignKey.Valid {
+			col.ForeignKey = foreignKey.String
+		}
+
 		columns = append(columns, col)
 	}
 
