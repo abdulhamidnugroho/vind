@@ -22,6 +22,7 @@ type mockDBClient struct {
 	insertRecordFunc func(schema, table string, data map[string]any) error
 	updateRecordFunc func(schema, table string, data, where map[string]any) (int64, error)
 	deleteRecordFunc func(schema, table string, conditions map[string]any) (int64, error)
+	createTableFunc  func(tableName string, columns []model.ColumnDef) error
 }
 
 func (m *mockDBClient) Connect(dsn string) error {
@@ -65,6 +66,12 @@ func (m *mockDBClient) DeleteRecord(schema, table string, conditions map[string]
 		return m.deleteRecordFunc(schema, table, conditions)
 	}
 	return 0, nil
+}
+func (m *mockDBClient) CreateTable(tableName string, columns []model.ColumnDef) error {
+	if m.createTableFunc != nil {
+		return m.createTableFunc(tableName, columns)
+	}
+	return nil
 }
 
 type listTablesMock struct {
@@ -323,15 +330,15 @@ func TestListColumnsHandler(t *testing.T) {
 			activeDB: &mockDBClient{
 				listColumnsFunc: func(schema, table string) ([]model.Column, error) {
 					return []model.Column{
-						{Name: "id", Type: "int"},
-						{Name: "name", Type: "text"},
+						{Name: "id", Type: "int", Nullable: false, Default: "", IsUnique: false, ForeignKey: ""},
+						{Name: "name", Type: "text", Nullable: false, Default: "", IsUnique: false, ForeignKey: ""},
 					}, nil
 				},
 			},
 			schema:       "public",
 			table:        "users",
 			expectedCode: http.StatusOK,
-			expectedBody: `{"columns":[{"name":"id","type":"int","nullable":false},{"name":"name","type":"text","nullable":false}]}`,
+			expectedBody: `{"columns":[{"name":"id","type":"int","nullable":false,"default":"","is_unique":false,"foreign_key":""},{"name":"name","type":"text","nullable":false,"default":"","is_unique":false,"foreign_key":""}]}`,
 		},
 	}
 
@@ -565,6 +572,73 @@ func TestUpdateRecordHandler(t *testing.T) {
 
 			assert.Equal(t, tc.expectedCode, w.Code)
 			if tc.expectedCode == http.StatusOK {
+				assert.JSONEq(t, tc.expectedBody, w.Body.String())
+			} else {
+				assert.Contains(t, w.Body.String(), tc.expectedBody)
+			}
+		})
+	}
+}
+
+func TestCreateTableHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name            string
+		activeDB        service.DBClient
+		body            string
+		createTableFunc func(tableName string, columns []model.ColumnDef) error
+		expectedCode    int
+		expectedBody    string
+	}{
+		{
+			name:         "invalid json",
+			activeDB:     &mockDBClient{},
+			body:         `{"table_name": "users", "columns": [`, // malformed
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":`, // partial match
+		},
+		{
+			name: "db error",
+			activeDB: &mockDBClient{
+				createTableFunc: func(tableName string, columns []model.ColumnDef) error {
+					return errors.New("fail create table")
+				},
+			},
+			body:         `{"table_name": "users", "columns": [{"name": "id", "type": "int"}]}`,
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: `{"error":"fail create table"}`,
+		},
+		{
+			name: "success",
+			activeDB: &mockDBClient{
+				createTableFunc: func(tableName string, columns []model.ColumnDef) error {
+					return nil
+				},
+			},
+			body:         `{"table_name": "users", "columns": [{"name": "id", "type": "int"}]}`,
+			expectedCode: http.StatusCreated,
+			expectedBody: `{"message":"table created successfully","table":"users"}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest("POST", "/tables", bytes.NewBufferString(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			// Patch CreateTable if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.createTableFunc != nil {
+				m.createTableFunc = tc.createTableFunc
+			}
+
+			CreateTableHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			if tc.expectedCode == http.StatusCreated {
 				assert.JSONEq(t, tc.expectedBody, w.Body.String())
 			} else {
 				assert.Contains(t, w.Body.String(), tc.expectedBody)

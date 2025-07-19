@@ -87,3 +87,21 @@ func ListColumnsHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"columns": columns})
 }
+
+func CreateTableHandler(c *gin.Context) {
+	var req model.CreateTableRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := activeDB.CreateTable(req.TableName, req.Columns); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "table created successfully",
+		"table":   req.TableName,
+	})
+}

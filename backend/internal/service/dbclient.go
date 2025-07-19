@@ -13,4 +13,5 @@ type DBClient interface {
 	InsertRecord(schema, table string, data map[string]any) error
 	UpdateRecord(schema, table string, data, where map[string]any) (int64, error)
 	DeleteRecord(schema, table string, conditions map[string]any) (int64, error)
+	CreateTable(tableName string, columns []model.ColumnDef) error
 }

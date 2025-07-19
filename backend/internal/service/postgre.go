@@ -383,3 +383,40 @@ func (p *PostgresClient) DeleteRecord(schema, table string, conditions map[strin
 
 	return rowsAffected, nil
 }
+
+func (c *PostgresClient) CreateTable(tableName string, columns []model.ColumnDef) error {
+	if tableName == "" || len(columns) == 0 {
+		return fmt.Errorf("invalid table definition")
+	}
+
+	var colDefs []string
+	var pkCols []string
+
+	for _, col := range columns {
+		colParts := []string{pq.QuoteIdentifier(col.Name), col.Type}
+		if col.NotNull {
+			colParts = append(colParts, "NOT NULL")
+		}
+		if col.Default != "" {
+			colParts = append(colParts, "DEFAULT "+col.Default)
+		}
+		colDefs = append(colDefs, strings.Join(colParts, " "))
+
+		if col.PrimaryKey {
+			pkCols = append(pkCols, pq.QuoteIdentifier(col.Name))
+		}
+	}
+
+	if len(pkCols) > 0 {
+		colDefs = append(colDefs, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(pkCols, ", ")))
+	}
+
+	query := fmt.Sprintf(
+		"CREATE TABLE %s (%s);",
+		pq.QuoteIdentifier(tableName),
+		strings.Join(colDefs, ", "),
+	)
+
+	_, err := c.db.Exec(query)
+	return err
+}
