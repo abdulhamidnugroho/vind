@@ -39,6 +39,11 @@ func QueryHandler(c *gin.Context) {
 }
 
 func TableDataHandler(c *gin.Context) {
+	if activeDB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Not connected to any database"})
+		return
+	}
+
 	schema := c.DefaultQuery("schema", "public")
 	table := c.Query("table")
 	limit := c.DefaultQuery("limit", "100")
@@ -46,10 +51,6 @@ func TableDataHandler(c *gin.Context) {
 	orderBy := c.Query("order_by")
 	filters := c.QueryArray("filter")
 
-	if activeDB == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Not connected to any database"})
-		return
-	}
 	if table == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing table name"})
 		return

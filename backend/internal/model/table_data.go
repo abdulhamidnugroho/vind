@@ -26,3 +26,16 @@ type ColumnDef struct {
 	NotNull    bool   `json:"not_null"`
 	Default    string `json:"default,omitempty"`
 }
+
+type AlterTableOperation struct {
+	Action     string `json:"action" binding:"required"` // "add_column", "drop_column", "rename_column", "alter_column"
+	ColumnName string `json:"column_name,omitempty"`
+	NewName    string `json:"new_name,omitempty"` // For rename_column
+	Type       string `json:"type,omitempty"`     // For add_column or alter_column
+	NotNull    *bool  `json:"not_null,omitempty"` // For alter_column
+	Default    string `json:"default,omitempty"`  // For alter_column
+}
+
+type AlterTableRequest struct {
+	Operations []AlterTableOperation `json:"operations" binding:"required,min=1,dive"`
+}

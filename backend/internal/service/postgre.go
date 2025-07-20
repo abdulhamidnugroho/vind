@@ -420,3 +420,61 @@ func (c *PostgresClient) CreateTable(tableName string, columns []model.ColumnDef
 	_, err := c.db.Exec(query)
 	return err
 }
+
+func (c *PostgresClient) AlterTable(tableName string, ops []model.AlterTableOperation) error {
+	if tableName == "" || len(ops) == 0 {
+		return fmt.Errorf("invalid alter table request")
+	}
+
+	var statements []string
+	for _, op := range ops {
+		switch op.Action {
+		case "add_column":
+			if op.ColumnName == "" || op.Type == "" {
+				return fmt.Errorf("add_column requires column_name and type")
+			}
+			stmt := fmt.Sprintf("ADD COLUMN %s %s", pq.QuoteIdentifier(op.ColumnName), op.Type)
+			statements = append(statements, stmt)
+
+		case "drop_column":
+			if op.ColumnName == "" {
+				return fmt.Errorf("drop_column requires column_name")
+			}
+			stmt := fmt.Sprintf("DROP COLUMN %s", pq.QuoteIdentifier(op.ColumnName))
+			statements = append(statements, stmt)
+
+		case "rename_column":
+			if op.ColumnName == "" || op.NewName == "" {
+				return fmt.Errorf("rename_column requires column_name and new_name")
+			}
+			stmt := fmt.Sprintf("RENAME COLUMN %s TO %s", pq.QuoteIdentifier(op.ColumnName), pq.QuoteIdentifier(op.NewName))
+			statements = append(statements, stmt)
+
+		case "alter_column":
+			if op.ColumnName == "" {
+				return fmt.Errorf("alter_column requires column_name")
+			}
+			if op.Type != "" {
+				stmt := fmt.Sprintf("ALTER COLUMN %s TYPE %s", pq.QuoteIdentifier(op.ColumnName), op.Type)
+				statements = append(statements, stmt)
+			}
+			if op.NotNull != nil {
+				if *op.NotNull {
+					statements = append(statements, fmt.Sprintf("ALTER COLUMN %s SET NOT NULL", pq.QuoteIdentifier(op.ColumnName)))
+				} else {
+					statements = append(statements, fmt.Sprintf("ALTER COLUMN %s DROP NOT NULL", pq.QuoteIdentifier(op.ColumnName)))
+				}
+			}
+			if op.Default != "" {
+				statements = append(statements, fmt.Sprintf("ALTER COLUMN %s SET DEFAULT %s", pq.QuoteIdentifier(op.ColumnName), op.Default))
+			}
+
+		default:
+			return fmt.Errorf("unsupported action: %s", op.Action)
+		}
+	}
+
+	query := fmt.Sprintf("ALTER TABLE %s %s;", pq.QuoteIdentifier(tableName), strings.Join(statements, ", "))
+	_, err := c.db.Exec(query)
+	return err
+}

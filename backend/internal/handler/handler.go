@@ -89,6 +89,10 @@ func ListColumnsHandler(c *gin.Context) {
 }
 
 func CreateTableHandler(c *gin.Context) {
+	if activeDB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No active DB connection"})
+		return
+	}
 	var req model.CreateTableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -103,5 +107,29 @@ func CreateTableHandler(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "table created successfully",
 		"table":   req.TableName,
+	})
+}
+
+func AlterTableHandler(c *gin.Context) {
+	tableName := c.Param("table_name")
+	var req model.AlterTableRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if activeDB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No active DB connection"})
+		return
+	}
+
+	if err := activeDB.AlterTable(tableName, req.Operations); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "table altered successfully",
+		"table":   tableName,
 	})
 }

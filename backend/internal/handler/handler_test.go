@@ -23,6 +23,7 @@ type mockDBClient struct {
 	updateRecordFunc func(schema, table string, data, where map[string]any) (int64, error)
 	deleteRecordFunc func(schema, table string, conditions map[string]any) (int64, error)
 	createTableFunc  func(tableName string, columns []model.ColumnDef) error
+	alterTableFunc   func(tableName string, ops []model.AlterTableOperation) error
 }
 
 func (m *mockDBClient) Connect(dsn string) error {
@@ -70,6 +71,12 @@ func (m *mockDBClient) DeleteRecord(schema, table string, conditions map[string]
 func (m *mockDBClient) CreateTable(tableName string, columns []model.ColumnDef) error {
 	if m.createTableFunc != nil {
 		return m.createTableFunc(tableName, columns)
+	}
+	return nil
+}
+func (m *mockDBClient) AlterTable(tableName string, ops []model.AlterTableOperation) error {
+	if m.alterTableFunc != nil {
+		return m.alterTableFunc(tableName, ops)
 	}
 	return nil
 }
@@ -724,6 +731,160 @@ func TestDeleteRecordHandler(t *testing.T) {
 			}
 
 			DeleteRecordHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			if tc.expectedCode == http.StatusOK {
+				assert.JSONEq(t, tc.expectedBody, w.Body.String())
+			} else {
+				assert.Contains(t, w.Body.String(), tc.expectedBody)
+			}
+		})
+	}
+}
+
+func TestAlterTableHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		activeDB       service.DBClient
+		tableName      string
+		body           string
+		alterTableFunc func(tableName string, ops []model.AlterTableOperation) error
+		expectedCode   int
+		expectedBody   string
+	}{
+		{
+			name:         "invalid json",
+			activeDB:     &mockDBClient{},
+			tableName:    "users",
+			body:         `{"operations": [{"action": "add_column"`, // malformed
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":`,
+		},
+		{
+			name:         "missing operations",
+			activeDB:     &mockDBClient{},
+			tableName:    "users",
+			body:         `{}`,
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":`,
+		},
+		{
+			name:         "empty operations array",
+			activeDB:     &mockDBClient{},
+			tableName:    "users",
+			body:         `{"operations": []}`,
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":`,
+		},
+		{
+			name:         "invalid operation - missing action",
+			activeDB:     &mockDBClient{},
+			tableName:    "users",
+			body:         `{"operations": [{"column_name": "email", "type": "varchar(255)"}]}`,
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":`,
+		},
+		{
+			name:         "no active db",
+			activeDB:     nil,
+			tableName:    "users",
+			body:         `{"operations": [{"action": "add_column", "column_name": "email", "type": "varchar(255)"}]}`,
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":`,
+		},
+		{
+			name: "db error",
+			activeDB: &mockDBClient{
+				alterTableFunc: func(tableName string, ops []model.AlterTableOperation) error {
+					return errors.New("fail alter table")
+				},
+			},
+			tableName:    "users",
+			body:         `{"operations": [{"action": "add_column", "column_name": "email", "type": "varchar(255)"}]}`,
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: `{"error":"fail alter table"}`,
+		},
+		{
+			name: "success - add column",
+			activeDB: &mockDBClient{
+				alterTableFunc: func(tableName string, ops []model.AlterTableOperation) error {
+					return nil
+				},
+			},
+			tableName:    "users",
+			body:         `{"operations": [{"action": "add_column", "column_name": "email", "type": "varchar(255)"}]}`,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"table altered successfully","table":"users"}`,
+		},
+		{
+			name: "success - drop column",
+			activeDB: &mockDBClient{
+				alterTableFunc: func(tableName string, ops []model.AlterTableOperation) error {
+					return nil
+				},
+			},
+			tableName:    "users",
+			body:         `{"operations": [{"action": "drop_column", "column_name": "old_field"}]}`,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"table altered successfully","table":"users"}`,
+		},
+		{
+			name: "success - rename column",
+			activeDB: &mockDBClient{
+				alterTableFunc: func(tableName string, ops []model.AlterTableOperation) error {
+					return nil
+				},
+			},
+			tableName:    "users",
+			body:         `{"operations": [{"action": "rename_column", "column_name": "old_name", "new_name": "new_name"}]}`,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"table altered successfully","table":"users"}`,
+		},
+		{
+			name: "success - alter column",
+			activeDB: &mockDBClient{
+				alterTableFunc: func(tableName string, ops []model.AlterTableOperation) error {
+					return nil
+				},
+			},
+			tableName:    "users",
+			body:         `{"operations": [{"action": "alter_column", "column_name": "age", "type": "bigint", "not_null": true, "default": "0"}]}`,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"table altered successfully","table":"users"}`,
+		},
+		{
+			name: "success - multiple operations",
+			activeDB: &mockDBClient{
+				alterTableFunc: func(tableName string, ops []model.AlterTableOperation) error {
+					return nil
+				},
+			},
+			tableName:    "users",
+			body:         `{"operations": [{"action": "add_column", "column_name": "email", "type": "varchar(255)"}, {"action": "drop_column", "column_name": "old_field"}]}`,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"table altered successfully","table":"users"}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest("PUT", "/tables/"+tc.tableName, bytes.NewBufferString(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Params = gin.Params{
+				{Key: "table_name", Value: tc.tableName},
+			}
+
+			// Patch AlterTable if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.alterTableFunc != nil {
+				m.alterTableFunc = tc.alterTableFunc
+			}
+
+			AlterTableHandler(c)
 
 			assert.Equal(t, tc.expectedCode, w.Code)
 			if tc.expectedCode == http.StatusOK {
