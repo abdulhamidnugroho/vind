@@ -27,6 +27,8 @@ func main() {
 	r.PUT("/records", handler.UpdateRecordHandler)
 	r.DELETE("/records", handler.DeleteRecordHandler)
 	r.POST("/api/schema/tables", handler.CreateTableHandler)
+	r.PATCH("/api/schema/tables/:table_name", handler.AlterTableHandler)
+	r.DELETE("/api/schema/tables/:table_name", handler.DropTableHandler)
 
 	r.Run(":" + os.Getenv("PORT")) // Default port is set in .env file
 }

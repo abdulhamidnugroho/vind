@@ -478,3 +478,18 @@ func (c *PostgresClient) AlterTable(tableName string, ops []model.AlterTableOper
 	_, err := c.db.Exec(query)
 	return err
 }
+
+func (c *PostgresClient) DropTable(tableName string, cascade bool) error {
+	if tableName == "" {
+		return fmt.Errorf("table name is required")
+	}
+
+	query := fmt.Sprintf("DROP TABLE %s", pq.QuoteIdentifier(tableName))
+	if cascade {
+		query += " CASCADE"
+	}
+	query += ";"
+
+	_, err := c.db.Exec(query)
+	return err
+}

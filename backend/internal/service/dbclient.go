@@ -15,4 +15,5 @@ type DBClient interface {
 	DeleteRecord(schema, table string, conditions map[string]any) (int64, error)
 	CreateTable(tableName string, columns []model.ColumnDef) error
 	AlterTable(tableName string, ops []model.AlterTableOperation) error
+	DropTable(tableName string, cascade bool) error
 }

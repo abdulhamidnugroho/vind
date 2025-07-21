@@ -24,6 +24,7 @@ type mockDBClient struct {
 	deleteRecordFunc func(schema, table string, conditions map[string]any) (int64, error)
 	createTableFunc  func(tableName string, columns []model.ColumnDef) error
 	alterTableFunc   func(tableName string, ops []model.AlterTableOperation) error
+	dropTableFunc    func(tableName string, cascade bool) error
 }
 
 func (m *mockDBClient) Connect(dsn string) error {
@@ -77,6 +78,12 @@ func (m *mockDBClient) CreateTable(tableName string, columns []model.ColumnDef) 
 func (m *mockDBClient) AlterTable(tableName string, ops []model.AlterTableOperation) error {
 	if m.alterTableFunc != nil {
 		return m.alterTableFunc(tableName, ops)
+	}
+	return nil
+}
+func (m *mockDBClient) DropTable(tableName string, cascade bool) error {
+	if m.dropTableFunc != nil {
+		return m.dropTableFunc(tableName, cascade)
 	}
 	return nil
 }
@@ -891,6 +898,132 @@ func TestAlterTableHandler(t *testing.T) {
 				assert.JSONEq(t, tc.expectedBody, w.Body.String())
 			} else {
 				assert.Contains(t, w.Body.String(), tc.expectedBody)
+			}
+		})
+	}
+}
+
+func TestDropTableHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name          string
+		activeDB      service.DBClient
+		tableName     string
+		cascadeQuery  string
+		dropTableFunc func(tableName string, cascade bool) error
+		expectedCode  int
+		expectedBody  string
+	}{
+		{
+			name:         "no active db",
+			activeDB:     nil,
+			tableName:    "users",
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"error":"No active DB connection"}`,
+		},
+		{
+			name: "success without cascade",
+			activeDB: &mockDBClient{
+				dropTableFunc: func(tableName string, cascade bool) error {
+					assert.Equal(t, "users", tableName)
+					assert.False(t, cascade)
+					return nil
+				},
+			},
+			tableName:    "users",
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"table dropped successfully","table":"users"}`,
+		},
+		{
+			name: "success with cascade=true",
+			activeDB: &mockDBClient{
+				dropTableFunc: func(tableName string, cascade bool) error {
+					assert.Equal(t, "users", tableName)
+					assert.True(t, cascade)
+					return nil
+				},
+			},
+			tableName:    "users",
+			cascadeQuery: "true",
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"table dropped successfully","table":"users"}`,
+		},
+		{
+			name: "success with cascade=false",
+			activeDB: &mockDBClient{
+				dropTableFunc: func(tableName string, cascade bool) error {
+					assert.Equal(t, "users", tableName)
+					assert.False(t, cascade)
+					return nil
+				},
+			},
+			tableName:    "users",
+			cascadeQuery: "false",
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"table dropped successfully","table":"users"}`,
+		},
+		{
+			name: "invalid cascade parameter ignored",
+			activeDB: &mockDBClient{
+				dropTableFunc: func(tableName string, cascade bool) error {
+					assert.Equal(t, "users", tableName)
+					assert.False(t, cascade) // Should default to false for invalid values
+					return nil
+				},
+			},
+			tableName:    "users",
+			cascadeQuery: "invalid",
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"table dropped successfully","table":"users"}`,
+		},
+		{
+			name: "db error",
+			activeDB: &mockDBClient{
+				dropTableFunc: func(tableName string, cascade bool) error {
+					return errors.New("table does not exist")
+				},
+			},
+			tableName:    "nonexistent",
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: `{"error":"table does not exist"}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+
+			// Build URL with query parameter if provided
+			url := "/tables/" + tc.tableName
+			if tc.cascadeQuery != "" {
+				url += "?cascade=" + tc.cascadeQuery
+			}
+
+			c.Request, _ = http.NewRequest("DELETE", url, nil)
+			c.Params = gin.Params{
+				{Key: "table_name", Value: tc.tableName},
+			}
+
+			// Set up query parameters
+			if tc.cascadeQuery != "" {
+				c.Request.URL.RawQuery = "cascade=" + tc.cascadeQuery
+			}
+
+			// Patch DropTable if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.dropTableFunc != nil {
+				m.dropTableFunc = tc.dropTableFunc
+			}
+
+			DropTableHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			if tc.expectedCode == http.StatusOK {
+				assert.JSONEq(t, tc.expectedBody, w.Body.String())
+			} else {
+				assert.JSONEq(t, tc.expectedBody, w.Body.String())
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package handler
 import (
 	"log"
 	"net/http"
+	"strconv"
 	"vind/backend/internal/model"
 	"vind/backend/internal/service"
 
@@ -130,6 +131,33 @@ func AlterTableHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "table altered successfully",
+		"table":   tableName,
+	})
+}
+
+func DropTableHandler(c *gin.Context) {
+	if activeDB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No active DB connection"})
+		return
+	}
+
+	tableName := c.Param("table_name")
+	cascade := false
+
+	// Optional ?cascade=true
+	if val := c.Query("cascade"); val != "" {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			cascade = parsed
+		}
+	}
+
+	if err := activeDB.DropTable(tableName, cascade); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "table dropped successfully",
 		"table":   tableName,
 	})
 }
