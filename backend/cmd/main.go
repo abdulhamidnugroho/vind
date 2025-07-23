@@ -29,6 +29,9 @@ func main() {
 	r.POST("/api/schema/tables", handler.CreateTableHandler)
 	r.PATCH("/api/schema/tables/:table_name", handler.AlterTableHandler)
 	r.DELETE("/api/schema/tables/:table_name", handler.DropTableHandler)
+	r.POST("/api/schema/constraints", handler.AddConstraintHandler)
+	r.DELETE("/api/schema/constraints/:table_name/:constraint_name", handler.DropConstraintHandler)
+	r.GET("/api/schema/:table_name/constraints", handler.ListConstraintsHandler)
 
 	r.Run(":" + os.Getenv("PORT")) // Default port is set in .env file
 }

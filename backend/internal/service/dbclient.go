@@ -16,4 +16,8 @@ type DBClient interface {
 	CreateTable(tableName string, columns []model.ColumnDef) error
 	AlterTable(tableName string, ops []model.AlterTableOperation) error
 	DropTable(tableName string, cascade bool) error
+
+	AddConstraint(params model.AddConstraintParams) error
+	DropConstraint(tableName, constraintName string, cascade bool) error
+	ListConstraints(tableName string) ([]model.ConstraintInfo, error)
 }

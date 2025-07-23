@@ -493,3 +493,119 @@ func (c *PostgresClient) DropTable(tableName string, cascade bool) error {
 	_, err := c.db.Exec(query)
 	return err
 }
+
+func quoteIdentifiers(cols []string) []string {
+	quoted := make([]string, len(cols))
+	for i, col := range cols {
+		quoted[i] = pq.QuoteIdentifier(col)
+	}
+	return quoted
+}
+
+func (c *PostgresClient) AddConstraint(params model.AddConstraintParams) error {
+	if params.TableName == "" || params.ConstraintName == "" || params.Type == "" {
+		return fmt.Errorf("table_name, constraint_name, and type are required")
+	}
+
+	var query string
+
+	switch strings.ToUpper(params.Type) {
+	case "PRIMARY KEY":
+		if len(params.Columns) == 0 {
+			return fmt.Errorf("columns are required for PRIMARY KEY")
+		}
+		query = fmt.Sprintf(`ALTER TABLE %s ADD CONSTRAINT %s PRIMARY KEY (%s);`,
+			pq.QuoteIdentifier(params.TableName),
+			pq.QuoteIdentifier(params.ConstraintName),
+			strings.Join(quoteIdentifiers(params.Columns), ", "),
+		)
+	case "UNIQUE":
+		if len(params.Columns) == 0 {
+			return fmt.Errorf("columns are required for UNIQUE constraint")
+		}
+		query = fmt.Sprintf(`ALTER TABLE %s ADD CONSTRAINT %s UNIQUE (%s);`,
+			pq.QuoteIdentifier(params.TableName),
+			pq.QuoteIdentifier(params.ConstraintName),
+			strings.Join(quoteIdentifiers(params.Columns), ", "),
+		)
+	case "FOREIGN KEY":
+		if len(params.Columns) == 0 || params.RefTable == "" || len(params.RefColumns) == 0 {
+			return fmt.Errorf("columns, ref_table, and ref_columns are required for FOREIGN KEY")
+		}
+		query = fmt.Sprintf(`ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s)`,
+			pq.QuoteIdentifier(params.TableName),
+			pq.QuoteIdentifier(params.ConstraintName),
+			strings.Join(quoteIdentifiers(params.Columns), ", "),
+			pq.QuoteIdentifier(params.RefTable),
+			strings.Join(quoteIdentifiers(params.RefColumns), ", "),
+		)
+		if params.OnDelete != "" {
+			query += fmt.Sprintf(" ON DELETE %s", params.OnDelete)
+		}
+		if params.OnUpdate != "" {
+			query += fmt.Sprintf(" ON UPDATE %s", params.OnUpdate)
+		}
+		query += ";"
+	case "CHECK":
+		if params.CheckExpr == "" {
+			return fmt.Errorf("check_expr is required for CHECK constraint")
+		}
+		query = fmt.Sprintf(`ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s);`,
+			pq.QuoteIdentifier(params.TableName),
+			pq.QuoteIdentifier(params.ConstraintName),
+			params.CheckExpr,
+		)
+	default:
+		return fmt.Errorf("unsupported constraint type: %s", params.Type)
+	}
+
+	_, err := c.db.Exec(query)
+	return err
+}
+
+func (c *PostgresClient) DropConstraint(tableName, constraintName string, cascade bool) error {
+	if tableName == "" || constraintName == "" {
+		return fmt.Errorf("table_name and constraint_name are required")
+	}
+
+	query := fmt.Sprintf(`ALTER TABLE %s DROP CONSTRAINT %s`,
+		pq.QuoteIdentifier(tableName),
+		pq.QuoteIdentifier(constraintName),
+	)
+	if cascade {
+		query += " CASCADE"
+	}
+	query += ";"
+
+	_, err := c.db.Exec(query)
+	return err
+}
+
+func (c *PostgresClient) ListConstraints(tableName string) ([]model.ConstraintInfo, error) {
+	query := `
+		SELECT con.conname AS constraint_name,
+		       con.contype AS constraint_type,
+		       tbl.relname AS table_name,
+		       pg_get_constraintdef(con.oid) AS definition
+		FROM pg_constraint con
+			JOIN pg_class tbl ON con.conrelid = tbl.oid
+			JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+		WHERE tbl.relname = $1;
+	`
+
+	rows, err := c.db.Query(query, tableName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var constraints []model.ConstraintInfo
+	for rows.Next() {
+		var cInfo model.ConstraintInfo
+		if err := rows.Scan(&cInfo.ConstraintName, &cInfo.ConstraintType, &cInfo.TableName, &cInfo.Definition); err != nil {
+			return nil, err
+		}
+		constraints = append(constraints, cInfo)
+	}
+	return constraints, nil
+}

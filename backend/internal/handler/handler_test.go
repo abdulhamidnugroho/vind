@@ -15,16 +15,19 @@ import (
 )
 
 type mockDBClient struct {
-	connectFunc      func(dsn string) error
-	listColumnsFunc  func(schema, table string) ([]model.Column, error)
-	executeQueryFunc func(query string) ([]string, [][]any, error)
-	getTableDataFunc func(model.TableDataRequest) ([]string, [][]any, error)
-	insertRecordFunc func(schema, table string, data map[string]any) error
-	updateRecordFunc func(schema, table string, data, where map[string]any) (int64, error)
-	deleteRecordFunc func(schema, table string, conditions map[string]any) (int64, error)
-	createTableFunc  func(tableName string, columns []model.ColumnDef) error
-	alterTableFunc   func(tableName string, ops []model.AlterTableOperation) error
-	dropTableFunc    func(tableName string, cascade bool) error
+	connectFunc         func(dsn string) error
+	listColumnsFunc     func(schema, table string) ([]model.Column, error)
+	executeQueryFunc    func(query string) ([]string, [][]any, error)
+	getTableDataFunc    func(model.TableDataRequest) ([]string, [][]any, error)
+	insertRecordFunc    func(schema, table string, data map[string]any) error
+	updateRecordFunc    func(schema, table string, data, where map[string]any) (int64, error)
+	deleteRecordFunc    func(schema, table string, conditions map[string]any) (int64, error)
+	createTableFunc     func(tableName string, columns []model.ColumnDef) error
+	alterTableFunc      func(tableName string, ops []model.AlterTableOperation) error
+	dropTableFunc       func(tableName string, cascade bool) error
+	addConstraintFunc   func(params model.AddConstraintParams) error
+	dropConstraintFunc  func(tableName, constraintName string, cascade bool) error
+	listConstraintsFunc func(tableName string) ([]model.ConstraintInfo, error)
 }
 
 func (m *mockDBClient) Connect(dsn string) error {
@@ -86,6 +89,24 @@ func (m *mockDBClient) DropTable(tableName string, cascade bool) error {
 		return m.dropTableFunc(tableName, cascade)
 	}
 	return nil
+}
+func (m *mockDBClient) AddConstraint(params model.AddConstraintParams) error {
+	if m.addConstraintFunc != nil {
+		return m.addConstraintFunc(params)
+	}
+	return nil
+}
+func (m *mockDBClient) DropConstraint(tableName, constraintName string, cascade bool) error {
+	if m.dropConstraintFunc != nil {
+		return m.dropConstraintFunc(tableName, constraintName, cascade)
+	}
+	return nil
+}
+func (m *mockDBClient) ListConstraints(tableName string) ([]model.ConstraintInfo, error) {
+	if m.listConstraintsFunc != nil {
+		return m.listConstraintsFunc(tableName)
+	}
+	return nil, nil
 }
 
 type listTablesMock struct {
@@ -1024,6 +1045,340 @@ func TestDropTableHandler(t *testing.T) {
 				assert.JSONEq(t, tc.expectedBody, w.Body.String())
 			} else {
 				assert.JSONEq(t, tc.expectedBody, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestAddConstraintHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name              string
+		activeDB          service.DBClient
+		body              string
+		addConstraintFunc func(params model.AddConstraintParams) error
+		expectedCode      int
+		expectedBody      string
+	}{
+		{
+			name:         "invalid json",
+			activeDB:     &mockDBClient{},
+			body:         `{"invalid json"}`,
+			expectedCode: http.StatusBadRequest,
+			expectedBody: "invalid character",
+		},
+		{
+			name: "success primary key constraint",
+			activeDB: &mockDBClient{
+				addConstraintFunc: func(params model.AddConstraintParams) error {
+					assert.Equal(t, "users", params.TableName)
+					assert.Equal(t, "pk_users", params.ConstraintName)
+					assert.Equal(t, "PRIMARY KEY", params.Type)
+					assert.Equal(t, []string{"id"}, params.Columns)
+					return nil
+				},
+			},
+			body:         `{"table_name":"users","constraint_name":"pk_users","type":"PRIMARY KEY","columns":["id"]}`,
+			expectedCode: http.StatusCreated,
+			expectedBody: `{"message":"constraint added successfully","constraint":"pk_users"}`,
+		},
+		{
+			name: "success foreign key constraint",
+			activeDB: &mockDBClient{
+				addConstraintFunc: func(params model.AddConstraintParams) error {
+					assert.Equal(t, "orders", params.TableName)
+					assert.Equal(t, "fk_user_id", params.ConstraintName)
+					assert.Equal(t, "FOREIGN KEY", params.Type)
+					assert.Equal(t, []string{"user_id"}, params.Columns)
+					assert.Equal(t, "users", params.RefTable)
+					assert.Equal(t, []string{"id"}, params.RefColumns)
+					assert.Equal(t, "CASCADE", params.OnDelete)
+					return nil
+				},
+			},
+			body:         `{"table_name":"orders","constraint_name":"fk_user_id","type":"FOREIGN KEY","columns":["user_id"],"ref_table":"users","ref_columns":["id"],"on_delete":"CASCADE"}`,
+			expectedCode: http.StatusCreated,
+			expectedBody: `{"message":"constraint added successfully","constraint":"fk_user_id"}`,
+		},
+		{
+			name: "success check constraint",
+			activeDB: &mockDBClient{
+				addConstraintFunc: func(params model.AddConstraintParams) error {
+					assert.Equal(t, "products", params.TableName)
+					assert.Equal(t, "chk_price", params.ConstraintName)
+					assert.Equal(t, "CHECK", params.Type)
+					assert.Equal(t, "price > 0", params.CheckExpr)
+					return nil
+				},
+			},
+			body:         `{"table_name":"products","constraint_name":"chk_price","type":"CHECK","check_expr":"price > 0"}`,
+			expectedCode: http.StatusCreated,
+			expectedBody: `{"message":"constraint added successfully","constraint":"chk_price"}`,
+		},
+		{
+			name: "db error",
+			activeDB: &mockDBClient{
+				addConstraintFunc: func(params model.AddConstraintParams) error {
+					return errors.New("constraint already exists")
+				},
+			},
+			body:         `{"table_name":"users","constraint_name":"pk_users","type":"PRIMARY KEY","columns":["id"]}`,
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: "constraint already exists",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest("POST", "/api/schema/constraints", bytes.NewBufferString(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			// Patch AddConstraint if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.addConstraintFunc != nil {
+				m.addConstraintFunc = tc.addConstraintFunc
+			}
+
+			AddConstraintHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			if tc.expectedCode == http.StatusCreated {
+				assert.JSONEq(t, tc.expectedBody, w.Body.String())
+			} else {
+				assert.Contains(t, w.Body.String(), tc.expectedBody)
+			}
+		})
+	}
+}
+
+func TestDropConstraintHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name               string
+		activeDB           service.DBClient
+		tableName          string
+		constraintName     string
+		cascadeQuery       string
+		dropConstraintFunc func(tableName, constraintName string, cascade bool) error
+		expectedCode       int
+		expectedBody       string
+	}{
+		{
+			name: "success without cascade",
+			activeDB: &mockDBClient{
+				dropConstraintFunc: func(tableName, constraintName string, cascade bool) error {
+					assert.Equal(t, "users", tableName)
+					assert.Equal(t, "pk_users", constraintName)
+					assert.False(t, cascade)
+					return nil
+				},
+			},
+			tableName:      "users",
+			constraintName: "pk_users",
+			expectedCode:   http.StatusOK,
+			expectedBody:   `{"message":"constraint dropped successfully","constraint":"pk_users"}`,
+		},
+		{
+			name: "success with cascade=true",
+			activeDB: &mockDBClient{
+				dropConstraintFunc: func(tableName, constraintName string, cascade bool) error {
+					assert.Equal(t, "orders", tableName)
+					assert.Equal(t, "fk_user_id", constraintName)
+					assert.True(t, cascade)
+					return nil
+				},
+			},
+			tableName:      "orders",
+			constraintName: "fk_user_id",
+			cascadeQuery:   "true",
+			expectedCode:   http.StatusOK,
+			expectedBody:   `{"message":"constraint dropped successfully","constraint":"fk_user_id"}`,
+		},
+		{
+			name: "success with cascade=false",
+			activeDB: &mockDBClient{
+				dropConstraintFunc: func(tableName, constraintName string, cascade bool) error {
+					assert.Equal(t, "products", tableName)
+					assert.Equal(t, "chk_price", constraintName)
+					assert.False(t, cascade)
+					return nil
+				},
+			},
+			tableName:      "products",
+			constraintName: "chk_price",
+			cascadeQuery:   "false",
+			expectedCode:   http.StatusOK,
+			expectedBody:   `{"message":"constraint dropped successfully","constraint":"chk_price"}`,
+		},
+		{
+			name: "invalid cascade parameter ignored",
+			activeDB: &mockDBClient{
+				dropConstraintFunc: func(tableName, constraintName string, cascade bool) error {
+					assert.Equal(t, "users", tableName)
+					assert.Equal(t, "unique_email", constraintName)
+					assert.False(t, cascade) // Should default to false for invalid values
+					return nil
+				},
+			},
+			tableName:      "users",
+			constraintName: "unique_email",
+			cascadeQuery:   "invalid",
+			expectedCode:   http.StatusOK,
+			expectedBody:   `{"message":"constraint dropped successfully","constraint":"unique_email"}`,
+		},
+		{
+			name: "db error",
+			activeDB: &mockDBClient{
+				dropConstraintFunc: func(tableName, constraintName string, cascade bool) error {
+					return errors.New("constraint does not exist")
+				},
+			},
+			tableName:      "nonexistent",
+			constraintName: "fake_constraint",
+			expectedCode:   http.StatusInternalServerError,
+			expectedBody:   "constraint does not exist",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+
+			// Build URL with query parameter if provided
+			url := "/api/schema/constraints/" + tc.tableName + "/" + tc.constraintName
+			if tc.cascadeQuery != "" {
+				url += "?cascade=" + tc.cascadeQuery
+			}
+
+			c.Request, _ = http.NewRequest("DELETE", url, nil)
+			c.Params = gin.Params{
+				{Key: "table_name", Value: tc.tableName},
+				{Key: "constraint_name", Value: tc.constraintName},
+			}
+
+			// Set up query parameters
+			if tc.cascadeQuery != "" {
+				c.Request.URL.RawQuery = "cascade=" + tc.cascadeQuery
+			}
+
+			// Patch DropConstraint if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.dropConstraintFunc != nil {
+				m.dropConstraintFunc = tc.dropConstraintFunc
+			}
+
+			DropConstraintHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			if tc.expectedCode == http.StatusOK {
+				assert.JSONEq(t, tc.expectedBody, w.Body.String())
+			} else {
+				assert.Contains(t, w.Body.String(), tc.expectedBody)
+			}
+		})
+	}
+}
+
+func TestListConstraintsHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name                string
+		activeDB            service.DBClient
+		tableName           string
+		listConstraintsFunc func(tableName string) ([]model.ConstraintInfo, error)
+		expectedCode        int
+		expectedBody        string
+	}{
+		{
+			name: "success with constraints",
+			activeDB: &mockDBClient{
+				listConstraintsFunc: func(tableName string) ([]model.ConstraintInfo, error) {
+					assert.Equal(t, "users", tableName)
+					return []model.ConstraintInfo{
+						{
+							ConstraintName: "pk_users",
+							ConstraintType: "p",
+							TableName:      "users",
+							Definition:     "PRIMARY KEY (id)",
+						},
+						{
+							ConstraintName: "unique_email",
+							ConstraintType: "u",
+							TableName:      "users",
+							Definition:     "UNIQUE (email)",
+						},
+					}, nil
+				},
+			},
+			tableName:    "users",
+			expectedCode: http.StatusOK,
+			expectedBody: `{"constraints":[{"constraint_name":"pk_users","constraint_type":"p","table_name":"users","definition":"PRIMARY KEY (id)"},{"constraint_name":"unique_email","constraint_type":"u","table_name":"users","definition":"UNIQUE (email)"}]}`,
+		},
+		{
+			name: "success with no constraints",
+			activeDB: &mockDBClient{
+				listConstraintsFunc: func(tableName string) ([]model.ConstraintInfo, error) {
+					assert.Equal(t, "empty_table", tableName)
+					return []model.ConstraintInfo{}, nil
+				},
+			},
+			tableName:    "empty_table",
+			expectedCode: http.StatusOK,
+			expectedBody: `{"constraints":[]}`,
+		},
+		{
+			name: "success with nil constraints",
+			activeDB: &mockDBClient{
+				listConstraintsFunc: func(tableName string) ([]model.ConstraintInfo, error) {
+					assert.Equal(t, "another_table", tableName)
+					return nil, nil
+				},
+			},
+			tableName:    "another_table",
+			expectedCode: http.StatusOK,
+			expectedBody: `{"constraints":null}`,
+		},
+		{
+			name: "db error",
+			activeDB: &mockDBClient{
+				listConstraintsFunc: func(tableName string) ([]model.ConstraintInfo, error) {
+					return nil, errors.New("table does not exist")
+				},
+			},
+			tableName:    "nonexistent",
+			expectedCode: http.StatusInternalServerError,
+			expectedBody: "table does not exist",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			activeDB = tc.activeDB
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest("GET", "/api/schema/"+tc.tableName+"/constraints", nil)
+			c.Params = gin.Params{
+				{Key: "table_name", Value: tc.tableName},
+			}
+
+			// Patch ListConstraints if needed
+			if m, ok := tc.activeDB.(*mockDBClient); ok && tc.listConstraintsFunc != nil {
+				m.listConstraintsFunc = tc.listConstraintsFunc
+			}
+
+			ListConstraintsHandler(c)
+
+			assert.Equal(t, tc.expectedCode, w.Code)
+			if tc.expectedCode == http.StatusOK {
+				assert.JSONEq(t, tc.expectedBody, w.Body.String())
+			} else {
+				assert.Contains(t, w.Body.String(), tc.expectedBody)
 			}
 		})
 	}

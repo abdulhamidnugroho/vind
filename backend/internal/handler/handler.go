@@ -161,3 +161,62 @@ func DropTableHandler(c *gin.Context) {
 		"table":   tableName,
 	})
 }
+
+func AddConstraintHandler(c *gin.Context) {
+	var params model.AddConstraintParams
+	if err := c.ShouldBindJSON(&params); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if activeDB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No active DB connection"})
+		return
+	}
+
+	if err := activeDB.AddConstraint(params); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"message": "constraint added successfully", "constraint": params.ConstraintName})
+}
+
+func DropConstraintHandler(c *gin.Context) {
+	tableName := c.Param("table_name")
+	constraintName := c.Param("constraint_name")
+	cascade := false
+
+	if val := c.Query("cascade"); val != "" {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			cascade = parsed
+		}
+	}
+
+	if activeDB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No active DB connection"})
+		return
+	}
+
+	if err := activeDB.DropConstraint(tableName, constraintName, cascade); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "constraint dropped successfully", "constraint": constraintName})
+}
+
+func ListConstraintsHandler(c *gin.Context) {
+	if activeDB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No active DB connection"})
+		return
+	}
+
+	tableName := c.Param("table_name")
+	constraints, err := activeDB.ListConstraints(tableName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"constraints": constraints})
+}
